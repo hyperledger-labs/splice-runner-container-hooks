@@ -12,9 +12,10 @@ import {
   containerPorts,
   createPod,
   isPodContainerAlpine,
-  prunePods,
+  prunePodsAndServices,
   waitForPodPhases,
-  getPrepareJobTimeoutSeconds
+  getPrepareJobTimeoutSeconds,
+  createService,
 } from '../k8s'
 import {
   containerVolumes,
@@ -27,6 +28,7 @@ import {
   fixArgs
 } from '../k8s/utils'
 import { CONTAINER_EXTENSION_PREFIX, JOB_CONTAINER_NAME } from './constants'
+import { waitForRpcStatus } from '../k8s/rpc'
 
 export async function prepareJob(
   args: PrepareJobArgs,
@@ -36,7 +38,7 @@ export async function prepareJob(
     throw new Error('Job Container is required.')
   }
 
-  await prunePods()
+  await prunePodsAndServices()
 
   const extension = readExtensionFromFile()
   await copyExternalsToRoot()
@@ -78,7 +80,7 @@ export async function prepareJob(
       extension
     )
   } catch (err) {
-    await prunePods()
+    await prunePodsAndServices()
     core.debug(`createPod failed: ${JSON.stringify(err)}`)
     const message = (err as any)?.response?.body?.message || err
     throw new Error(`failed to create job pod: ${message}`)
@@ -87,6 +89,17 @@ export async function prepareJob(
   if (!createdPod?.metadata?.name) {
     throw new Error('created pod should have metadata.name')
   }
+
+  let createdService: k8s.V1Service | undefined = undefined
+  try {
+    createdService = await createService(createdPod)
+  } catch (err) {
+    await prunePodsAndServices()
+    core.debug(`createService failed: ${JSON.stringify(err)}`)
+    const message = (err as any)?.response?.body?.message || err
+    throw new Error(`failed to create job pod: ${message}`)
+  }
+
   core.debug(
     `Job pod created, waiting for it to come online ${createdPod?.metadata?.name}`
   )
@@ -98,8 +111,11 @@ export async function prepareJob(
       new Set([PodPhase.PENDING]),
       getPrepareJobTimeoutSeconds()
     )
+
+    await waitForRpcStatus(`http://${createdService?.metadata?.name}:8080`)
+
   } catch (err) {
-    await prunePods()
+    await prunePodsAndServices()
     throw new Error(`pod failed to come online with error: ${err}`)
   }
 
@@ -119,13 +135,14 @@ export async function prepareJob(
     throw new Error(`failed to determine if the pod is alpine: ${message}`)
   }
   core.debug(`Setting isAlpine to ${isAlpine}`)
-  generateResponseFile(responseFile, args, createdPod, isAlpine)
+  generateResponseFile(responseFile, args, createdPod, createdService, isAlpine)
 }
 
 function generateResponseFile(
   responseFile: string,
   args: PrepareJobArgs,
   appPod: k8s.V1Pod,
+  appService: k8s.V1Service,
   isAlpine
 ): void {
   if (!appPod.metadata?.name) {
@@ -133,7 +150,8 @@ function generateResponseFile(
   }
   const response = {
     state: {
-      jobPod: appPod.metadata.name
+      jobPod: appPod.metadata.name,
+      jobService: appService.metadata?.name,
     },
     context: {},
     isAlpine
