@@ -8,6 +8,7 @@ import {
   getSecretName,
   getStepPodName,
   getVolumeClaimName,
+  JOB_CONTAINER_NAME,
   RunnerInstanceLabel
 } from '../hooks/constants'
 import {
@@ -48,6 +49,12 @@ export const requiredPermissions = [
     verbs: ['get', 'list', 'watch'],
     resource: 'pods',
     subresource: 'log'
+  },
+  {
+    group: '',
+    verbs: ['get', 'list', 'create', 'delete'],
+    resource: 'services',
+    subresource: ''
   },
   {
     group: 'batch',
@@ -128,6 +135,26 @@ export async function createPod(
   const { body } = await k8sApi.createNamespacedPod(namespace(), appPod)
   return body
 }
+
+export async function createService(
+  pod: k8s.V1Pod
+): Promise<k8s.V1Service> {
+  const service = new k8s.V1Service()
+  service.apiVersion = 'v1'
+  service.kind = 'Service'
+  service.metadata = new k8s.V1ObjectMeta()
+  service.metadata.name = getJobPodName()
+  service.metadata.labels = pod.metadata?.labels
+  service.metadata.annotations = pod.metadata?.annotations
+
+  service.spec = new k8s.V1ServiceSpec()
+  service.spec.selector = pod.metadata?.labels
+  service.spec.ports = [{ port: 8080, targetPort: 8080 }]
+
+  const { body } = await k8sApi.createNamespacedService(namespace(), service)
+  return body
+}
+
 
 export async function createJob(
   container: k8s.V1Container,
@@ -213,6 +240,16 @@ export async function getContainerJobPodName(jobName: string): Promise<string> {
 export async function deletePod(podName: string): Promise<void> {
   await k8sApi.deleteNamespacedPod(
     podName,
+    namespace(),
+    undefined,
+    undefined,
+    0
+  )
+}
+
+export async function deleteService(svcName: string): Promise<void> {
+  await k8sApi.deleteNamespacedService(
+    svcName,
     namespace(),
     undefined,
     undefined,
@@ -459,6 +496,10 @@ export async function getPodLogs(
   await new Promise(resolve => r.on('close', () => resolve(null)))
 }
 
+export async function prunePodsAndServices(): Promise<void> {
+  await Promise.all([prunePods(), pruneServices()])
+}
+
 export async function prunePods(): Promise<void> {
   const podList = await k8sApi.listNamespacedPod(
     namespace(),
@@ -475,6 +516,26 @@ export async function prunePods(): Promise<void> {
   await Promise.all(
     podList.body.items.map(
       pod => pod.metadata?.name && deletePod(pod.metadata.name)
+    )
+  )
+}
+
+export async function pruneServices(): Promise<void> {
+  const svcList = await k8sApi.listNamespacedService(
+    namespace(),
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    new RunnerInstanceLabel().toString()
+  )
+  if (!svcList.body.items.length) {
+    return
+  }
+
+  await Promise.all(
+    svcList.body.items.map(
+      svc => svc.metadata?.name && deleteService(svc.metadata.name)
     )
   )
 }

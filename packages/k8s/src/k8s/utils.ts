@@ -9,8 +9,12 @@ import { POD_VOLUME_NAME } from './index'
 import { CONTAINER_EXTENSION_PREFIX } from '../hooks/constants'
 import * as shlex from 'shlex'
 
-export const DEFAULT_CONTAINER_ENTRY_POINT_ARGS = [`-f`, `/dev/null`]
-export const DEFAULT_CONTAINER_ENTRY_POINT = 'tail'
+// For now, we assume that the entry point script exists in the workflow container image,
+// and just invoke it. If this were to be generalized and reused outside of our own repo,
+// we should probably remove this assumption and e.g. mount the entrypoint into that pod
+// via a configMap instead.
+export const DEFAULT_CONTAINER_ENTRY_POINT_ARGS = []
+export const DEFAULT_CONTAINER_ENTRY_POINT = '/gha-runner-rpc.py'
 
 export const ENV_HOOK_TEMPLATE_PATH = 'ACTIONS_RUNNER_CONTAINER_HOOK_TEMPLATE'
 export const ENV_USE_KUBE_SCHEDULER = 'ACTIONS_RUNNER_USE_KUBE_SCHEDULER'
@@ -110,7 +114,7 @@ export function writeEntryPointScript(
   entryPointArgs?: string[],
   prependPath?: string[],
   environmentVariables?: { [key: string]: string }
-): { containerPath: string; runnerPath: string } {
+): { containerPath: string; runnerPath: string, id: string } {
   let exportPath = ''
   if (prependPath?.length) {
     // TODO: remove compatibility with typeof prependPath === 'string' as we bump to next major version, the hooks will lose PrependPath compat with runners 2.293.0 and older
@@ -151,12 +155,14 @@ exec ${environmentPrefix} ${entryPoint} ${
     entryPointArgs?.length ? entryPointArgs.join(' ') : ''
   }
 `
-  const filename = `${uuidv4()}.sh`
+  const id = uuidv4()
+  const filename = `${id}.sh`
   const entryPointPath = `${process.env.RUNNER_TEMP}/${filename}`
   fs.writeFileSync(entryPointPath, content)
   return {
     containerPath: `/__w/_temp/${filename}`,
-    runnerPath: entryPointPath
+    runnerPath: entryPointPath,
+    id: id,
   }
 }
 
