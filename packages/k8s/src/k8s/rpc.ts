@@ -10,18 +10,39 @@ interface RpcResult {
 
 }
 
+async function retryPromise<T>(operation: () => Promise<T>, maxRetries: number): Promise<T> {
+  let retries = 0;
+  while (true) {
+    try {
+      return await operation();
+    } catch (error) {
+      retries++;
+      if (retries >= maxRetries) {
+        core.error(`Error in fetch: ${error}`);
+        throw error;
+      }
+      core.warning(`Error in fetch: ${error}, retrying...`);
+      await new Promise(resolve => setTimeout(resolve, 3000));
+    }
+  }
+}
+
+const fetchWithRetry = async (request: Request) => {
+  return retryPromise(() => fetch(request), 10);
+};
+
 async function startRpc(url: string, id: string, containerPath: string): Promise<RpcResult> {
 
   new Promise<void>((resolve) => {
     process.on('SIGINT', () => {
       core.warning('Received SIGINT, terminating');
       const request = new Request(`${url}/`, { method: 'DELETE' })
-      fetch(request).then(() => resolve());
+      fetchWithRetry(request).then(() => resolve());
     })
     process.on('SIGTERM', () => {
       core.warning('Received SIGTERM, terminating');
       const request = new Request(`${url}/`, { method: 'DELETE' })
-      fetch(request).then(() => resolve());
+      fetchWithRetry(request).then(() => resolve());
     })
   });
 
@@ -37,7 +58,7 @@ async function startRpc(url: string, id: string, containerPath: string): Promise
       headers: headers,
       body: JSON.stringify({ "id": id, "path": containerPath })
     })
-  const response = await fetch(request)
+  const response = await fetchWithRetry(request)
   const status = await response.json()
   if (status.status === 'failed' && status.id === id) {
     throw new Error(`rpc failed to start: ${status.error}`)
@@ -51,7 +72,7 @@ async function getRpcStatus(url: string): Promise<RpcResult> {
     'Accept': 'application/json',
   }
   const request = new Request(url, { method: 'GET', headers: headers })
-  const response = await fetch(request)
+  const response = await fetchWithRetry(request)
   return response.json()
 }
 
@@ -65,7 +86,7 @@ async function getLogs(url: string, id: string, fromLine: number): Promise<strin
     fromLine: fromLine.toString()
   })
   const request = new Request(`${url}?${params.toString()}`, { method: 'GET', headers: headers })
-  const response = await fetch(request)
+  const response = await fetchWithRetry(request)
   return response.json()
 }
 
