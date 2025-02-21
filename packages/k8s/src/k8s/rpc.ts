@@ -66,13 +66,13 @@ async function startRpc(url: string, id: string, containerPath: string): Promise
   return await waitForRpcStatus(url, id);
 }
 
-async function getRpcStatus(url: string): Promise<RpcResult> {
+async function getRpcStatus(url: string, withRetries: boolean = true): Promise<RpcResult> {
   const headers = {
     'Content-Type': 'application/json',
     'Accept': 'application/json',
   }
   const request = new Request(url, { method: 'GET', headers: headers })
-  const response = await fetchWithRetry(request)
+  const response = withRetries ? await fetchWithRetry(request) : await fetch(request)
   return response.json()
 }
 
@@ -159,7 +159,7 @@ export async function rpcPodStep(
 export async function waitForRpcStatus(url: string, expectedId?: string): Promise<RpcResult> {
   while (true) {
     try {
-      const status = await getRpcStatus(url)
+      const status = await getRpcStatus(url, false)
       if (!expectedId || status.id === expectedId) {
         return status
       }
